@@ -39,7 +39,7 @@ module Passenger
 		end
 		
 		def percent_used
-		  @active.to_i / @max.to_i
+		  @count.to_i / @max.to_i
 		end
 		
 		private 
@@ -52,5 +52,5 @@ end
 
 Dir['/tmp/passenger_status.*.fifo'].map { |f| open(f) }.each do |io|
 	status = Passenger::Status.new(io)
-	puts "Using #{status.active} of #{status.max} (#{status.percent_used}%)"
+	puts "Using #{status.count} of #{status.max} (#{status.percent_used}%)"
 end
