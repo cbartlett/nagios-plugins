@@ -38,6 +38,10 @@ module Passenger
 			end
 		end
 		
+		def percent_used
+		  @active / @max
+		end
+		
 		private 
 		
 		def read_attribute(delim = /\s+=\s+/)
@@ -48,5 +52,5 @@ end
 
 Dir['/tmp/passenger_status.*.fifo'].map { |f| open(f) }.each do |io|
 	status = Passenger::Status.new(io)
-	puts "Using #{status.active} of #{status.max}"
+	puts "Using #{status.active} of #{status.max} (#{status.percent_used}%)"
 end
