@@ -39,7 +39,7 @@ module Passenger
 		end
 		
 		def percent_used
-		  @active / @max
+		  @active.to_int / @max.to_int
 		end
 		
 		private 
