@@ -1,0 +1,200 @@
+#!/usr/bin/ruby
+
+# == Synopsis
+#
+# Check on the overall health of mongrel clusters.
+#
+# == Usage
+#
+# check_mongrel_cluster --host hostname --warn 100 --crit 50 --servers 10 -port 9000
+#
+# check_mongrel --yml /path/to/mongrel_cluster.yml
+#
+# Depending on how you're leveraging mongrel_cluster, you may wish to do remote
+# monitoring or local monitoring.  Typically check_mongrel_cluster is run 
+# via the check_nrpe plugin on the host running mongrel.  This is because it's best
+# to only have mongrel bind to localhost, so network checks need to be issues from
+# localhost.
+#
+# In the case that you're running on the same host as mongrel_cluster, it's easiest to 
+# use the --yml option, letting check_mongrel_cluster read the mongrel cluster 
+# configuration.
+#
+# Command line options for all of the necessary parameters are provided so that
+# using the mongrel_cluster.yml is not necessary.
+#
+# == Options
+#
+# --help -h
+#
+# --warn -w
+#
+# --crit -c
+#
+# --servers -s
+#
+# --port -p
+#
+# --host -n
+#
+# --yml -y
+#
+# == License
+#
+# This script was developed by Tangeis, LLC and Kinetic Web 
+# Solutions, LLC.  It's released undere the MIT License in the hopes 
+# that it be found useful and that we make some small contribution
+# to a culture of software which has been so helpful to us.
+# 
+# Feel free to pass comments along to alibby at tangeis dot com.
+# 
+# The MIT License
+#
+# Copyright (c) 2007 Tangeis LLC and Kinetic Web Solutions.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+# == Required Libraries
+
+require 'getoptlong'
+require 'rdoc/usage'
+require 'ostruct';
+require 'yaml';
+require 'socket';
+
+class Checker < OpenStruct
+    include Socket::Constants
+
+    def initialize 
+        super
+        self.warning=100
+        self.critical=1
+        self.host='localhost'
+    end
+
+    def read_from_yml(file)
+        yml = YAML::load_file(file)
+        yml.each_pair do |k,v|
+            self.send("#{k}=",v)
+        end
+    end
+
+    def ports;( port.to_i .. (port.to_i + servers.to_i - 1 ) ).to_a; end
+
+    def check
+        return if self.checked
+        self.checked = true
+        self.failed_connects=Hash.new
+
+        ports.each do |p|
+            socket = Socket.new( AF_INET, SOCK_STREAM, 0 )
+            sockaddr = Socket.pack_sockaddr_in( p, host )
+            begin
+                socket.connect( sockaddr )
+            rescue Errno::ECONNREFUSED => e
+                self.failed_connects.store(p,e.message)
+            end
+        end
+    end
+
+    def warning; super.to_f; end
+
+    def critical; super.to_f; end
+
+    def count_up
+        self.check
+        self.ports.size - self.failed_connects.keys.size
+    end
+
+    def count_down
+        self.check
+        self.failed_connects.keys.size
+    end
+
+    def percent_up
+        self.check
+        return 0 if count_up === 0
+        ( count_up.to_f / servers.to_f ) * 100
+    end
+end
+
+@checker = Checker.new
+
+begin
+    opts = GetoptLong.new(
+        [ '--help', "-h", GetoptLong::NO_ARGUMENT ],
+        [ '--crit', '-c', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--warn', '-w', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--servers', '-s', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--host', '-H', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--port', '-p', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--yml', '-y', GetoptLong::REQUIRED_ARGUMENT ]
+    ).each do |opt,arg|
+        case opt
+            when '--help', '-h'
+                RDoc::usage
+
+            when '--warn','-w'
+                @checker.warn = arg
+
+            when '--crit','-c'
+                @checker.crit = arg
+            
+            when '--servers','-s'
+                @checker.servers = arg
+
+            when '--port','-p'
+                @checker.port = arg
+            
+            when '--host', '-H'
+                @checker.host = arg
+
+            when '--yml', '-y'
+                @checker.read_from_yml arg
+        end
+    end
+rescue GetoptLong::InvalidOption => e
+    puts e.to_s
+    exit 3
+end
+
+unless @checker.servers
+    puts "Please supply number of servers via yaml or --servers"
+    exit 3
+end
+
+unless @checker.port
+    puts "Please supply base servers via yaml or --port"
+    exit 3
+end
+
+if @checker.percent_up === 100
+    puts "OKAY: #{@checker.count_up}/#{@checker.servers} servers up!"
+    exit 0
+elsif @checker.percent_up < @checker.critical
+    puts "CRITICAL: CLUSTER DOWN"
+    exit 2
+elsif @checker.percent_up < @checker.warning
+    puts "WARNING: #{@checker.count_up}/#{@checker.servers} servers up!"
+    exit 1 
+else
+    puts "UNKNOWN status"
+    exit 3
+end    
+

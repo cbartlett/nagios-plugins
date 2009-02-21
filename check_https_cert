@@ -1,0 +1,505 @@
+#!/usr/bin/ruby
+
+# == Synopsis
+# 
+# cert_check: pulls https certificats and performs checking
+# 
+# == Usage
+# 
+# cert_check -h|--help ip host network ...
+#
+# check_https_cert [options] host|ip_address
+#
+# == Options
+#
+# -h, --help:
+#  show help
+#
+# -d, --days [days]
+#   Will only report on the certs expiring in less than [days] days from
+#   now.
+#
+# --html
+#  Output in HTML
+#
+# --mail-to [recipient]
+#  add mime headers for html email
+#
+# --mail-subject
+#  set mail subject header on output (ripe for piping to sendmail)
+#
+# --nagios-plugin
+#  behave like a nagios plugin.   When this script behaves like
+#  a nagios plugin the output is appropriate for nagios, AND
+#  the return values are 0, 1, 2, or 3 based on the Nagios
+#  plugin protocol.  You can have this be the default by renaming
+#  or symlinking to this script with the name 'check_https_cert'
+#
+# Note, command can take as many ip/ host/ network specifications as
+# the shell will allow.  Also, the network specification is
+# ip/maxk, as in 65.242.88.0/24
+#
+# Exit Status:
+#
+# Exit status values are modeled around Nagios.
+#
+# 0 - Okay
+#
+# 1 - Warning
+#
+# 2 - Critical
+#
+# 3 - Command line problems
+#
+#
+# == License
+#
+# This script was developed by Tangeis, LLC and Kinetic Web 
+# Solutions, LLC.  It's released under the MIT License in the hopes 
+# that it be found useful and that we make some small contribution
+# to a culture of software which has been so helpful to us.
+# 
+# Feel free to pass comments along to alibby at tangeis dot com.
+# 
+# The MIT License
+#
+# Copyright (c) 2007 Tangeis, LLC and Kinetic Web Solutions, LLC
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+# == Required Libraries
+#
+# This software is written in the Ruby programming language.  As such
+# you'll need a few software packages to make use of it.
+#
+# o Ruby language (developed using 1.8.5)
+#
+# o Ruby getopt (developed using 1.3.5)
+#
+# o nmap.  If you pass the non-nagios check command mode a networkie looking
+#   thing (like 156.23.23.0/24), nmap is used to scan for IPs with port 443
+#   open, and a cert check is performed on each.
+
+require 'date'
+require 'net/http'
+require 'net/https'
+require 'socket'
+require 'ipaddr'
+require 'timeout'
+require 'getoptlong'
+require 'rdoc/usage'
+
+# Standard exception, though we can optionall cary around
+# a certificte in case we need information from it when 
+# dealing with the error.
+class CheckException < Exception
+    attr :cert, true
+
+    def initialize(msg, cert=nil)
+        @cert = cert
+        super(msg)
+    end
+end
+
+# Outputters use data in the context along with specific
+# logic to render output.  
+#
+class TextOutputter
+    attr :context, true
+
+    def initialize
+        @context=nil
+        super
+    end
+
+    def header
+        ""
+    end
+
+    def footer
+        s = ""
+        s += "Errors: \n" if context.errors.length > 0
+        context.errors.each do |error|
+            s += error.to_s + "\n"
+        end
+        context.outfile.print s
+    end
+
+    def entry(cert)
+       context.outfile.print "#{cert.ip_addr} #{cert.host} #{cert.not_after} #{cert.issuer_name}(#{ cert.time_to_expiration })\n"
+    end
+
+    def error(exception)
+       
+    end
+end
+
+# Outputter to render nagios plugin output
+class NagiosOutputter < TextOutputter
+    def entry(cert)
+        time_left = cert.days_to_expiration
+        if cert.nil? 
+            context.status = 3
+            context.outfile.puts "could not determine certificate information"
+        elsif time_left < 0 
+            context.status = 2 
+            context.outfile.puts "HTTPS CRIT - #{cert.host} CERT EXPIRED (#{cert.time_to_expiration})"
+        elsif time_left < context.nagios_crit.to_f
+            context.status = 2 
+            context.outfile.puts "HTTPS CRIT - #{cert.host} CERT WILL EXPIRE #{cert.time_to_expiration}"
+        elsif time_left < context.nagios_warn.to_f
+            context.status = 1
+            context.outfile.puts "HTTPS WARNING - #{cert.host} CERT WILL EXPIRE #{cert.time_to_expiration}"
+        else     
+            context.status = 0
+            context.outfile.puts "HTTPS OK - #{cert.host} CERT WILL EXPIRE #{cert.time_to_expiration}"
+        end
+    end
+end
+
+# Outputter to render html.
+class HtmlOutputter < TextOutputter
+    def header
+        context.outfile.puts %Q{<html><head>
+<title>#{File.basename(__FILE__)}</title></head>
+<style>
+.alert { color: red; }
+</style>
+<body>
+<table border=1>
+<tr><td>IP</td><td>cert host</td><td>expires</td><td>CA</td><td>days left</td></tr>
+}
+    end
+
+    def footer
+        s = "</table>"
+        s += "Errors: </br>\n" if context.errors.length > 0
+        context.errors.each do |error|
+            s += error.to_s + "</br>\n"
+        end
+        
+        s += "</body></html>\n"
+        context.outfile.puts s
+    end
+
+    def entry(cert)
+        if cert.days_to_expiration < 0
+            exp = "<b class='alert'>#{ cert.time_to_expiration }</b>"
+        else
+            exp = cert.time_to_expiration
+        end
+        context.outfile.puts "<tr><td>#{cert.ip_addr}</td><td>#{cert.host}</td><td>#{cert.not_after}</td><td>#{cert.issuer_name}</td><td>#{ exp }</td></tr>\n"
+    end
+end
+
+
+# Add some sweetness to the certificate.
+class OpenSSL::X509::Certificate
+    attr :ip_addr, true
+
+    begin
+     require 'rubygems'
+     require 'action_controller'
+     include ActionView::Helpers::DateHelper
+    rescue Exception => e
+    end
+
+
+    def initialize(*options)
+        @ip_addr = ""
+        super(*options)
+    end
+
+    # Parse grap a particular RDN (attribute) from the 
+    # subject in a certificate
+    def attribute_part(attribute,part)
+        parts = send(attribute).to_s.split('/').select {|s| s.length > 0 }.map {|s| s.split('=') }
+        part = parts.assoc(part)
+        return "" unless part
+        part.last || nill
+    end
+
+    # Grab the host part (cn or common name RDN) from the subject
+    # of the certificate
+    def host
+        attribute_part('subject', 'CN')
+    end
+
+    def issuer_name
+        attribute_part('issuer', 'CN')
+    end
+
+    def days_to_expiration
+        sprintf("%d", ( not_after - Time.now ) / ( 60 * 60 * 24 )).to_i
+    end
+
+    def time_to_expiration
+        str = ""
+        if respond_to?(:distance_of_time_in_words) 
+            str += "#{distance_of_time_in_words(Time.now(), not_after)} #{not_after < Time.now() ? "ago" : "from now"}"
+        else
+            str += "#{days_to_expiration} (days)"
+        end
+    end
+end
+
+class Array
+    # Execute cert_block on each (expanded) target in 
+    # the array.
+    def each_target(&cert_block)
+        each { |target_element|
+            target_element.each_target { |blk,target|
+                yield target
+            }
+        }
+    end
+end
+
+class String
+    # Do I quack like an IP?
+    def ip_addr?
+        match(/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/)
+    end
+
+    # If the thing in this string does not look like
+    # an IP address, perform a dns lookup and return the
+    # resulting A record.  If self looks like an IP, 
+    # just returns that.
+    # 
+    # In the event that this string holds something that
+    # resutls in a cname, fetch it to attempt to result in 
+    # an a record.
+    def to_ipaddr
+        unless ip_addr?
+            lookup = `host #{to_s} | grep address`.split(/\s+/)
+            return to_s unless lookup.length == 4
+            lookup[3]
+        else 
+            to_s
+        end
+    end
+
+    # Do I look like a network?
+    def network?
+        if matches = match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(\/\d{1,2})/)
+            matches.captures[0]
+        else 
+            false
+        end
+    end
+
+    # Execute the block for each (expanded) target from this string.
+    # If the string does not look like a network, the target itself is
+    # passed to the block.  If the string does look like a network, the 
+    # target is expanded with nmap looking for open port 443.  The block
+    # is executed for each IP that nmap things is open.
+    def each_target(&block)
+        if network?
+            cmd = "nmap -oG - #{to_s} -p 443"
+            IO.popen(cmd, 'r').each_line { |line|
+                if matches = line.match(/^Host:\s+([^\s]+).*open.*$/)
+                    yield block, matches.captures[0]
+                end
+            }
+        elsif ip_addr?
+            yield block, to_s
+        else
+            yield block, to_ipaddr
+        end
+
+    end
+
+    # Fetch the certificate.  If the certificate cannot be fetched due to 
+    # some known reason, a CheckException is thrown.
+    #
+    # Errors checked for: 
+    #  - HTTP HEAD request took more than 5 seconds.
+    #  - OpenSSL can't parse the certificate returned
+    #  - Could not connect, or host unreachable
+    #  - EOF before HTTP request was satisified
+    def fetch_certificate
+        http = Net::HTTP.new(to_s, 443)
+        http.use_ssl = true
+        http.verify_mode = OpenSSL::SSL::VERIFY_NONE
+        http.ssl_timeout = 2
+        http.timeout = 2
+        http.read_timeout = 2
+        begin
+            Timeout::timeout(5) do 
+                http.start do |http|
+                    response = http.request_head('/')
+                    cert = http.peer_cert
+                    cert.ip_addr = to_s
+                    return cert
+                end 
+            end
+        rescue Timeout::Error
+            raise CheckException.new("#{to_s}: timeout attempting to fetch SSL certificate")
+        rescue OpenSSL::SSL::SSLError => error
+            raise CheckException.new("#{to_s}: ssl error")
+        rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH => e
+            raise CheckException.new("#{to_s}: #{e}")
+        rescue EOFError => e
+            raise CheckException.new("#{to_s}: error reading certificate")
+        end
+    end
+end
+
+app = File.basename(__FILE__)
+
+# Context to represent state of the program.
+# It carries around a bunch of attributes (some set 
+# by command line processing).
+@context = Struct.new(
+    'Context', 
+    :days,                 # If the cert expires sooner than this, we're concerned.  0 is all dates.
+    :boundary,             # Use for mime email formatting
+    :render_html,          # triggers html rendering.  Ignored when called like a nagios plugin
+    :nagios_plugin,        # behave as nagios plugin
+    :nagios_warn,          # number of days to nagios warning
+    :nagios_crit,          # number of days to nagios critical
+    :outputter,            # outputter used for rendering output
+    :context,              # There's no place like home
+    :status,               # exit status  
+    :mail_subject,         # subject for mailing
+    :mail_to,              # recipient for mailing
+    :errors,               # collection of errors
+    :outfile               # output stream to render to
+).new(0)
+
+@context.status = 0
+@context.errors = []
+@context.outfile = $stdout
+@context.nagios_plugin = false
+@context.mail_subject = app
+@context.nagios_warn = 30
+@context.nagios_crit = 7
+
+begin
+    opts = GetoptLong.new(
+        [ '--help', "-h", GetoptLong::NO_ARGUMENT ],
+        [ '--crit', '-c', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--warn', '-w', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--days', '-d', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--html', GetoptLong::NO_ARGUMENT ],
+        [ '--mail-to', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--email-subject', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--mail-subject', GetoptLong::REQUIRED_ARGUMENT ],
+        [ '--nagios-plugin', GetoptLong::NO_ARGUMENT ]
+    ).each do |opt,arg|
+        case opt
+            when '--help', '-h'
+                RDoc::usage
+    
+            when '--days', '-d'
+                @context.days = arg
+    
+            when '--html'
+                @context.outputter = HtmlOutputter.new
+                @context.boundary = "--" + rand(Time.now.to_i).to_s
+   
+            when '--mail-to'
+                @context.mail_to = arg
+                @context.outfile = IO.popen("/usr/sbin/sendmail -t",'w')
+
+            when '--mail-subject', '--email-subject'
+                @context.mail_subject = arg
+
+            when '--nagios-plugin'
+                @context.nagios_plugin = true;
+
+            when '--warn','-w'
+                @context.nagios_warn = arg
+
+            when '--crit','-c'
+                @context.nagios_crit = arg
+        end
+    end
+rescue GetoptLong::InvalidOption => e
+    puts e.to_s
+    exit 3
+end
+
+@context.nagios_plugin = true if app == 'check_https_cert'
+
+if @context.nagios_plugin
+    # Called as nagios plugin
+    # If we are called like a nagios plugin
+    # expect a single IP or name on the command line and
+    # Execute based on that.
+    
+    target = ARGV.shift
+    unless target
+        puts "Supply IP address, see --help for details"
+        exit 3
+    end
+
+    unless target.ip_addr?
+        puts "--nagios-plugin needs target to be host or host name, not network"
+        exit 3
+    end
+    
+    begin
+      @context.outputter = NagiosOutputter.new
+      @context.outputter.context = @context
+      cert = target.fetch_certificate
+      @context.outputter.entry(cert)
+    rescue CheckException => e
+      puts e.message
+      exit 3
+    end
+else
+
+    unless ARGV.size > 0
+        $stderr.puts "Use -h or --help for usage"
+        exit
+    end
+
+    if @context.mail_to
+        @context.mail_to.split(/,/).each do |recip|
+            @context.outfile.puts "To: #{recip}"
+        end
+        @context.outfile.puts "Content-type: text/html; boundary=#{@context.boundary}" if @context.boundary
+    end
+
+    @context.outfile.puts "Subject: #{@context.mail_subject}" if @context.mail_to
+    @context.outputter ||= TextOutputter.new
+    @context.outputter.context = @context
+    
+    @context.outputter.header
+    
+    ARGV.each_target do |target|
+        begin
+            cert = target.fetch_certificate
+            
+            if cert.days_to_expiration < @context.days.to_f or @context.days == 0
+                @context.outputter.entry(cert)
+            end
+        rescue CheckException => e
+            @context.outputter.error(e)
+            @context.errors << e
+        end
+    end 
+    
+    @context.outputter.footer
+end
+
+#puts @context.boundary if @context.boundary
+exit @context.status
+
