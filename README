@@ -1,0 +1,9 @@
+
+This repo contains some nagios plugins that have been written by either
+Kinetic Web Solutions (http://www.kineticweb.com/), or xforty technologies
+(http://www.xforty.com/). From time to time we either don't feel a plugin
+is being maintained well, or we could not find one that does what we want.
+
+All code herein is published under the MIT license.  May it serve you 
+well.  See the file called LICENSE.
+
