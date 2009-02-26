@@ -54,7 +54,7 @@ end
 class RaidStat < OpenStruct
   def initialize(dev)
     super()
-    IO.popen("mdadm --detail #{dev}") { |io| 
+    IO.popen("/sbin/mdadm --detail #{dev}") { |io| 
         read_entry io
     }
     raise Exception.new("mdadm call failed....") if $? && $?.exitstatus != 0
