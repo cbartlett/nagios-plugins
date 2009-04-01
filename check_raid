@@ -41,8 +41,14 @@
 #
 
 require 'getoptlong'
-require 'rdoc/ri/ri_paths'
-require 'rdoc/usage'
+
+begin
+  require 'rdoc/ri/ri_paths'
+  require 'rdoc/usage'
+rescue Exception => e
+  # Do nothing
+end
+
 require 'ostruct'
 
 class String
