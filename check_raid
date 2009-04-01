@@ -83,17 +83,31 @@ end
 
 begin
    raid = RaidStat.new(device)
-   line = "#{raid.device}: State => #{raid.state} - Failed Devices => #{raid.failed_devices}"
-  
-   if raid.failed_devices.to_i > 0
-      puts "CRITICAL: #{line}"
-      exit 2
-   else
-      puts "OK: #{line}"
-   end
 rescue Exception => e
    puts "WARNING: Failed to get raid status for device: #{e}"
    exit 3
 end
 
+labels = %w/OK WARNING CRITICAL UNKNOWN/
+status = 0
+
+
+if raid.state =~ /^clean|active/ && raid.failed_devices.to_i > 0
+  status = 1
+elsif raid.state =~ /^clean|active/
+  status = 0
+elsif raid.state =~ /recovering/ && raid.failed_devices.to_i > 0
+  status = 1
+elsif raid.state =~ /recovering/
+  status = 0
+elsif raid.failed_devices.to_i > 0
+  status = 2
+elsif raid.state =~ /degraded/
+  status = 1
+else
+  status = 3
+end
+
+puts "#{labels[status]}: #{raid.device}: State => #{raid.state} #{raid.rebuild_status} - Failed Devices => #{raid.failed_devices}"
+exit status
 
