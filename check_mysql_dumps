@@ -1,0 +1,63 @@
+#!/usr/bin/env ruby
+# 
+# Checks the status of mysql dumps.
+
+class DB_Dump
+   @@max_age=60*60*30 # 30 hrs
+   @@user='backup'
+   @@pass=`echo 'cbdlvq!tfdsfu' | tr '[b-za]' '[a-z]'`.strip
+   @@backup_root='/var/mysql_backups'
+   attr_accessor :name, :file
+
+   def initialize(dbname)
+      @name = dbname
+      begin    
+      	@file = File.new(dump_file)
+      rescue Errno::EACCES => e
+        @file = nil
+      rescue Errno::ENOENT => e
+        @file = nil
+      end
+   end
+
+   def self.each_database
+       cmd=%Q{echo "SHOW DATABASES"|mysql -u #{@@user} --password='#{@@pass}' | sed -n '2,\$p'}
+       IO.popen(cmd,'r') { |io| io.each_line { |line| yield(self.new(line.strip)) } }
+   end
+   
+   def dump_file; "#{@@backup_root}/#{name}.sql"; end
+   def too_old?; file && (file.mtime < Time.now - @@max_age); end
+   def zero_size?; File.zero?(dump_file); end
+   def bad_dump?; file.nil? || too_old? || zero_size?; end
+   
+   def reason
+      return "#{dump_file} does not exist" unless file
+      return "#{dump_file} older than #{@@max_age.to_f/(60*60*24)} days" if too_old?
+      return "#{dump_file} contains no data" if zero_size?
+   end
+end
+
+@bad_databases = []
+@db_count = 0
+
+DB_Dump.each_database do |db|
+   @db_count+=1
+   begin
+      @bad_databases << db.reason if db.bad_dump?
+   rescue Exception => e
+      @bad_databases << e.message
+   end
+end
+
+if @bad_databases.empty?
+  puts "OK - database dumps are current"
+  exit(0)
+elsif(@bad_databases.length < (@db_count/2))
+  puts "WARNING - #{@bad_databases.length} of #{@db_count} dumps missing, empty or old"
+  exit(1)
+else
+  puts "CRITICAL - #{@bad_databases.length} of #{@db_count} dumps missing, empty or old"
+  exit(2)
+end
+
+__END__
