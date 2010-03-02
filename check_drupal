@@ -22,6 +22,8 @@ if [[ -e $PROGPATH/utils.sh ]]; then
   . $PROGPATH/utils.sh
 elif [[ -e /usr/lib/nagios/plugins/utils.sh ]]; then
   . /usr/lib/nagios/plugins/utils.sh
+elif [[ -e /usr/local/nagios/libexec/utils.sh ]]; then
+  . /usr/local/nagios/libexec/utils.sh
 else
   echo 'Could not find nagios utils include file!'
   exit 1
@@ -122,15 +124,13 @@ fi
 
 
 if $SSL; then
-  CMD="$WGET --no-check-certificate -S -T $timeout -O - -U $unique_id https://$hostname/$path"
+  CMD=("$WGET" --no-check-certificate -S -T $timeout -O "$temp" -U "$unique_id" "https://$hostname/$path")
 else
-  CMD="$WGET -S -T $timeout -O - -U $unique_id http://$hostname/$path"
+  CMD=("$WGET" -S -T $timeout -O "$temp" -U "$unique_id" http://$hostname/$path)
 fi
 
-$CMD > $temp 2>&1
+HTTP="$( "${CMD[@]}" 2>&1 | "$GREP" "HTTP/1" )"
 RC=$?
-
-HTTP=`$GREP "HTTP/1" $temp`
 
 if [ "$RC" != 0 ]; then
   $ECHO "wget error: $RC: when accessing $hostname/$path. HTTP: $HTTP"
@@ -169,6 +169,10 @@ esac
 
 # Send the data
 $ECHO "DRUPAL $DATA"
+
+echo -e "START\t$(date)\n" >> /tmp/check_drupal.log
+cat "$temp" >> /tmp/check_drupal.log
+echo -e "END\n" >> /tmp/check_drupal.log
 
 $RM -f $temp
 
