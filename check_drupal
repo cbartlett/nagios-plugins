@@ -22,8 +22,6 @@ if [[ -e $PROGPATH/utils.sh ]]; then
   . $PROGPATH/utils.sh
 elif [[ -e /usr/lib/nagios/plugins/utils.sh ]]; then
   . /usr/lib/nagios/plugins/utils.sh
-elif [[ -e /usr/local/nagios/libexec/utils.sh ]]; then
-  . /usr/local/nagios/libexec/utils.sh
 else
   echo 'Could not find nagios utils include file!'
   exit 1
@@ -169,10 +167,6 @@ esac
 
 # Send the data
 $ECHO "DRUPAL $DATA"
-
-echo -e "START\t$(date)\n" >> /tmp/check_drupal.log
-cat "$temp" >> /tmp/check_drupal.log
-echo -e "END\n" >> /tmp/check_drupal.log
 
 $RM -f $temp
 
