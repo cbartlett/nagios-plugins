@@ -117,6 +117,12 @@ if ($warnLevel > $daysOld)
     exit $ERRORS{'UNKNOWN'};
 }
 
+if ($ageWarningLevel > $ageCriticalLevel)
+{
+    print("BACKUPPC UNKNOWN - Age Warning threshold must be <= Age Critical\n");
+    exit $ERRORS{'UNKNOWN'};
+}
+
 # Connect to BackupPC
 my $server;
 if (!($server = BackupPC::Lib->new))
@@ -192,17 +198,17 @@ foreach my $host (sort(keys(%Status)))
 
     my $age = difftime(time(), $Status{$host}{'lastGoodBackupTime'});
 
-    my $msg = $is_error ? $Status{$host}{'error'} : int($age / 24 / 360)." days since last backup";
+    my $msg = $is_error ? $Status{$host}{'error'} : int($age / 24 / 3600)." days since last backup";
     my $host_info = [$host, $msg];
 
     if( ( $is_error &&  $age > ($daysOld * 360 * 24) ) ||
-        ( defined($ageCriticalLevel) && $age > ($ageCriticalLevel * 360 * 24) ) )
+        ( defined($ageCriticalLevel) && $age > ($ageCriticalLevel * 3600 * 24) ) )
     {
         push @criticals, $host_info;
         $is_error = 1;
     }
     elsif( ( $is_error && $age > ($warnLevel * 360 * 24) ) ||
-        ( defined($ageWarningLevel) && $age > ($ageWarningLevel * 360 * 24) ) )
+        ( defined($ageWarningLevel) && $age > ($ageWarningLevel * 3600 * 24) ) )
     {
         push @warnings, $host_info;
         $is_error = 1;
