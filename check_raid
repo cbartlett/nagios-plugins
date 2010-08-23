@@ -100,6 +100,8 @@ status = 0
 
 if raid.state =~ /^clean|active/ && raid.failed_devices.to_i > 0
   status = 1
+elsif raid.state =~ /^clean, degraded/
+  status = 1
 elsif raid.state =~ /^clean|active/
   status = 0
 elsif raid.state =~ /recovering/ && raid.failed_devices.to_i > 0
