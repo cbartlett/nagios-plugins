@@ -15,16 +15,16 @@ while getopts 'f:h' opt;  do
       exit $STATE_UNKNOWN
       ;;
     f)
-      REBOOT_FILE = $OPTARG
+      REBOOT_FILE=$OPTARG
       ;;
     esac
 done
 
 if [ -f "$REBOOT_FILE" ]; then
-  echo "WARNING - $1 EXISTS - SYSTEM RESTART NEEDED"
+  echo "WARNING - $REBOOT_FILE EXISTS - SYSTEM RESTART NEEDED"
   exit $STATE_WARNING
 else
-  echo "OK - $1 DOES NOT EXIST - NO RESTART NEEDED"
+  echo "OK - $REBOOT_FILE DOES NOT EXIST - NO RESTART NEEDED"
   exit $OK
 fi
 
