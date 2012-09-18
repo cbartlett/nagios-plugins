@@ -1,0 +1,30 @@
+#!/bin/bash
+
+PROGNAME=`basename $0`
+PROGPATH=`echo $0 | sed -e 's,[\\/][^\\/][^\\/]*$,,'`
+REBOOT_FILE=/var/run/reboot-required
+
+. $PROGPATH/utils.sh
+
+while getopts 'f:h' opt;  do
+  case $opt in
+    h)
+      echo "$PROGNAME"
+      echo
+      echo "Checks for the presence of $REBOOT_FILE and indicates the need for reboot"
+      exit $STATE_UNKNOWN
+      ;;
+    f)
+      REBOOT_FILE = $OPTARG
+      ;;
+    esac
+done
+
+if [ -f "$REBOOT_FILE" ]; then
+  echo "WARNING - $1 EXISTS - SYSTEM RESTART NEEDED"
+  exit $STATE_WARNING
+else
+  echo "OK - $1 DOES NOT EXIST - NO RESTART NEEDED"
+  exit $OK
+fi
+
